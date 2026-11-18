@@ -1,4 +1,4 @@
-# PDF.js [![Build Status](https://github.com/mozilla/pdf.js/workflows/CI/badge.svg?branch=master)](https://github.com/mozilla/pdf.js/actions?query=workflow%3ACI+branch%3Amaster)
+# PDF.js [![CI](https://github.com/mozilla/pdf.js/actions/workflows/ci.yml/badge.svg?query=branch%3Amaster)](https://github.com/mozilla/pdf.js/actions/workflows/ci.yml?query=branch%3Amaster) [![codecov](https://codecov.io/gh/mozilla/pdf.js/branch/master/graph/badge.svg)](https://codecov.io/gh/mozilla/pdf.js) [![Reference images](https://img.shields.io/endpoint?url=https%3A%2F%2Fmozilla.github.io%2Fpdf.js.refs%2Fmakeref-badge.json)](https://github.com/mozilla/pdf.js.refs/commits/main) [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/mozilla/pdf.js?utm_source=badge)
 
 [PDF.js](https://mozilla.github.io/pdf.js/) is a Portable Document Format (PDF) viewer that is built with HTML5.
 
@@ -14,7 +14,7 @@ get involved, visit:
 + [Issue Reporting Guide](https://github.com/mozilla/pdf.js/blob/master/.github/CONTRIBUTING.md)
 + [Code Contribution Guide](https://github.com/mozilla/pdf.js/wiki/Contributing)
 + [Frequently Asked Questions](https://github.com/mozilla/pdf.js/wiki/Frequently-Asked-Questions)
-+ [Good Beginner Bugs](https://github.com/mozilla/pdf.js/issues?direction=desc&labels=good-beginner-bug&page=1&sort=created&state=open)
++ [Good Beginner Bugs](https://github.com/mozilla/pdf.js/issues?q=is%3Aissue%20state%3Aopen%20label%3Agood-beginner-bug)
 + [Projects](https://github.com/mozilla/pdf.js/projects)
 
 Feel free to stop by our [Matrix room](https://chat.mozilla.org/#/room/#pdfjs:mozilla.org) for questions or guidance.
@@ -30,6 +30,9 @@ latest JavaScript features; please also see [this wiki page](https://github.com/
 
 + Older browsers: https://mozilla.github.io/pdf.js/legacy/web/viewer.html
 
+> [!NOTE]
+> Open new files via the menu (the ">>" icon) or by dragging and dropping.
+
 ### Browser Extensions
 
 #### Firefox
@@ -44,6 +47,10 @@ PDF.js is built into version 19+ of Firefox.
 Chrome, go to `Tools > Extension` and load the (unpackaged) extension from the
 directory `build/chromium`.
 
+### PDF debugger
+
+Browse the internal structure of a PDF document with https://mozilla.github.io/pdf.js/internal-viewer/web/debugger.html
+
 ## Getting the Code
 
 To get a local copy of the current code, clone it using git:
@@ -56,9 +63,6 @@ Next, install Node.js via the [official package](https://nodejs.org) or via
 all dependencies for PDF.js:
 
     $ npm install
-
-> [!NOTE]
-> On MacOS M1/M2 you may see some `node-gyp`-related errors when running `npm install`. This is because one of our dependencies, `"canvas"`, does not provide pre-built binaries for this platform and instead `npm` will try to build it from source. Please make sure to first install the necessary native dependencies using `brew`: https://github.com/Automattic/node-canvas#compiling.
 
 Finally, you need to start a local web server as some browsers do not allow opening
 PDF files using a `file://` URL. Run:
@@ -90,10 +94,105 @@ This will generate `pdf.js` and `pdf.worker.js` in the `build/generic/build/` di
 Both scripts are needed but only `pdf.js` needs to be included since `pdf.worker.js` will
 be loaded by `pdf.js`. The PDF.js files are large and should be minified for production.
 
+## Code coverage
+
+We track how much of the code is exercised by the test suite on
+[Codecov](https://codecov.io/gh/mozilla/pdf.js) (see the badge at the top of this
+file).
+
+### How it is collected
+
+When coverage is enabled, the build instruments the bundled code with
+[`babel-plugin-istanbul`](https://github.com/istanbuljs/babel-plugin-istanbul),
+which adds counters that record every line, branch and function that runs:
+
++ For browser-based tests (unit, integration and reference tests) the
+  instrumented code runs in the browser, fills a global `window.__coverage__`
+  object, and the test runner collects it from each browser session, merges the
+  results, and writes the report.
++ For the Node-based unit tests (`unittestcli`) the raw data is written to
+  `build/tmp/unittestcli-coverage.json` and turned into a report afterwards.
+
+### Collecting coverage locally
+
+Add the `--coverage` flag to any of the test tasks, for example:
+
+    $ npx gulp unittest --coverage           # browser unit tests
+    $ npx gulp unittestcli --coverage        # Node unit tests
+    $ npx gulp integrationtest --coverage    # Puppeteer integration tests
+    $ npx gulp botbrowsertest --coverage     # reference tests
+
+The following options control the output:
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `--coverage` | Enable coverage collection. | off |
+| `--coverage-output <dir>` | Directory where the report is written. | `build/coverage` |
+| `--coverage-formats <list>` | Comma-separated list of formats: `info`, `html`, `json`, `text`, `cobertura`, `clover`. | `info` |
+| `--coverage-per-test` | Also build a per-test index (see below). | off |
+
+By default the report is written to `build/coverage` in the `info` format, i.e.
+an [LCOV](https://github.com/linux-test-project/lcov) `lcov.info` file (the same
+format that is uploaded to Codecov). Use `--coverage-formats html` to get a
+browsable HTML report instead, or pass several formats at once, e.g.
+`--coverage-formats info,html`.
+
+### Finding which tests cover a given line
+
+`coverage_search` lists the ref tests that exercised a specific source line or
+function. It uses the per-test index (`per-test-index.json`) that is rebuilt on
+every push to `master` and published to the
+[`pdf.js.refs`](https://github.com/mozilla/pdf.js.refs/tree/gh-pages)
+repository. The index is downloaded on demand, cached locally, and only
+re-downloaded when it has changed, so no local coverage build is required:
+
+    $ npx gulp coverage_search --code="canvas.js::205"
+    $ npx gulp coverage_search --code="canvas.js::drawImageAtIntegerCoords"
+
+To run — or regenerate the reference images for — only the ref tests that touch
+a given line or function, pass the same `--code` option to a browser test or
+`makeref` task:
+
+    $ npx gulp browsertest --code="canvas.js::205"
+    $ npx gulp makeref --code="canvas.js::205"
+
+Pass `--no-download` to reuse the locally cached index without contacting the
+network. The index can also be built and queried locally (the CI job that
+publishes it builds it the same way):
+
+    $ npx gulp botbrowsertest --coverage-per-test
+    $ npx gulp coverage_search --code="canvas.js::205" \
+        --index=build/coverage/per-test-index.json --no-download
+
+### Continuous integration
+
+On every push and pull request three GitHub Actions workflows collect coverage
+and upload it to Codecov, each tagged with its own Codecov *flag* so the test
+types can be told apart:
+
+| Workflow | Task | Codecov flag |
+| --- | --- | --- |
+| `unit_tests.yml` | `unittest` | `unittest` |
+| `integration_tests.yml` | `integrationtest` | `integrationtest` |
+| `coverage_browser_tests.yml` | `botbrowsertest` | `browsertest` |
+
+## Benchmarks
+
+Run the benchmarks in `test/benchmarks/` locally:
+
+    $ npx gulp benchmark
+
+To compare with `master`:
+
+    $ git checkout master
+    $ npx gulp benchmark --output-json build/bench-master.json
+    $ git checkout my-branch
+    $ npx gulp benchmark --compare build/bench-master.json
+
 ## Using PDF.js in a web application
 
 To use PDF.js in a web application you can choose to use a pre-built version of the library
-or to build it from source. We supply pre-built versions for usage with NPM and Bower under
+or to build it from source. We supply pre-built versions for usage with NPM under
 the `pdfjs-dist` name. For more information and examples please refer to the
 [wiki page](https://github.com/mozilla/pdf.js/wiki/Setup-pdf.js-in-a-website) on this subject.
 

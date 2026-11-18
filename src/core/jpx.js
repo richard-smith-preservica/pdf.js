@@ -13,9 +13,9 @@
  * limitations under the License.
  */
 
-import { BaseException, warn } from "../shared/util.js";
+import { BaseException, shadow } from "../shared/util.js";
 import OpenJPEG from "../../external/openjpeg/openjpeg.js";
-import { Stream } from "./stream.js";
+import { WasmImage } from "./wasm_image.js";
 
 class JpxError extends BaseException {
   constructor(msg) {
@@ -23,31 +23,65 @@ class JpxError extends BaseException {
   }
 }
 
-class JpxImage {
-  static #module = null;
-
-  static decode(data, decoderOptions) {
-    decoderOptions ||= {};
-    this.#module ||= OpenJPEG({ warn });
-    const imageData = this.#module.decode(data, decoderOptions);
-    if (typeof imageData === "string") {
-      throw new JpxError(imageData);
-    }
-    return imageData;
+class JpxImage extends WasmImage {
+  static get instance() {
+    return shadow(
+      this,
+      "instance",
+      new JpxImage("openjpeg.wasm", "openjpeg_nowasm_fallback.js")
+    );
   }
 
-  static cleanup() {
-    this.#module = null;
+  async decode(
+    bytes,
+    {
+      numComponents,
+      isIndexedColormap = false,
+      smaskInData = false,
+      reducePower = 0,
+    } = {}
+  ) {
+    const padComponents = numComponents !== undefined;
+    numComponents ??= 4;
+    const module = await this._getModule(OpenJPEG);
+
+    if (!module) {
+      throw new JpxError("OpenJPEG failed to initialize");
+    }
+    let ptr;
+
+    try {
+      const size = bytes.length;
+      ptr = module._malloc(size);
+      module.writeArrayToMemory(bytes, ptr);
+      const ret = module._jp2_decode(
+        ptr,
+        size,
+        numComponents > 0 ? numComponents : 0,
+        !!isIndexedColormap,
+        !!smaskInData,
+        reducePower,
+        padComponents
+      );
+      if (ret) {
+        const { errorMessages } = module;
+        if (errorMessages) {
+          delete module.errorMessages;
+          throw new JpxError(errorMessages);
+        }
+        throw new JpxError("Unknown error");
+      }
+      const { imageData } = module;
+      return imageData;
+    } finally {
+      if (ptr) {
+        module._free(ptr);
+      }
+      module.imageData = null;
+    }
   }
 
   static parseImageProperties(stream) {
-    if (typeof PDFJSDev !== "undefined" && PDFJSDev.test("IMAGE_DECODERS")) {
-      if (stream instanceof ArrayBuffer || ArrayBuffer.isView(stream)) {
-        stream = new Stream(stream);
-      } else {
-        throw new JpxError("Invalid data format, must be a TypedArray.");
-      }
-    }
     // No need to use OpenJPEG here since we're only getting very basic
     // information which are located in the first bytes of the file.
     let newByte = stream.getByte();

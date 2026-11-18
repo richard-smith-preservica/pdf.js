@@ -13,7 +13,8 @@
  * limitations under the License.
  */
 
-import { FormatError } from "../shared/util.js";
+import { bytesToString, FormatError } from "../shared/util.js";
+import { Stream } from "./stream.js";
 
 function hexToInt(a, size) {
   let n = 0;
@@ -29,10 +30,9 @@ function hexToStr(a, size) {
   if (size === 1) {
     return String.fromCharCode(a[0], a[1]);
   }
-  if (size === 3) {
-    return String.fromCharCode(a[0], a[1], a[2], a[3]);
-  }
-  return String.fromCharCode(...a.subarray(0, size + 1));
+  return size === 3
+    ? String.fromCharCode(a[0], a[1], a[2], a[3])
+    : bytesToString(a.subarray(0, size + 1));
 }
 
 function addHex(a, b, size) {
@@ -56,26 +56,23 @@ function incHex(a, size) {
 const MAX_NUM_SIZE = 16;
 const MAX_ENCODED_NUM_SIZE = 19; // ceil(MAX_NUM_SIZE * 7 / 8)
 
-class BinaryCMapStream {
-  constructor(data) {
-    this.buffer = data;
-    this.pos = 0;
-    this.end = data.length;
-    this.tmpBuf = new Uint8Array(MAX_ENCODED_NUM_SIZE);
-  }
+class BinaryCMapStream extends Stream {
+  tmpBuf = new Uint8Array(MAX_ENCODED_NUM_SIZE);
 
-  readByte() {
-    if (this.pos >= this.end) {
-      return -1;
-    }
-    return this.buffer[this.pos++];
+  constructor(data) {
+    super(
+      /* arrayBuffer = */ data,
+      /* start = */ 0,
+      /* length = */ data.length,
+      /* dict = */ null
+    );
   }
 
   readNumber() {
     let n = 0;
     let last;
     do {
-      const b = this.readByte();
+      const b = this.getByte();
       if (b < 0) {
         throw new FormatError("unexpected EOF in bcmap");
       }
@@ -91,8 +88,7 @@ class BinaryCMapStream {
   }
 
   readHex(num, size) {
-    num.set(this.buffer.subarray(this.pos, this.pos + size + 1));
-    this.pos += size + 1;
+    num.set(this.getBytes(size + 1));
   }
 
   readHexNumber(num, size) {
@@ -100,7 +96,7 @@ class BinaryCMapStream {
     const stack = this.tmpBuf;
     let sp = 0;
     do {
-      const b = this.readByte();
+      const b = this.getByte();
       if (b < 0) {
         throw new FormatError("unexpected EOF in bcmap");
       }
@@ -132,20 +128,23 @@ class BinaryCMapStream {
     }
   }
 
-  readString() {
-    const len = this.readNumber(),
-      buf = new Array(len);
-    for (let i = 0; i < len; i++) {
-      buf[i] = this.readNumber();
+  readString(skip = false) {
+    const ii = this.readNumber();
+    if (skip) {
+      for (let i = 0; i < ii; i++) {
+        this.readNumber();
+      }
+      return null;
     }
-    return String.fromCharCode(...buf);
+    const buf = Array.from({ length: ii }, () => this.readNumber());
+    return bytesToString(buf);
   }
 }
 
 class BinaryCMapReader {
   async process(data, cMap, extend) {
     const stream = new BinaryCMapStream(data);
-    const header = stream.readByte();
+    const header = stream.getByte();
     cMap.vertical = !!(header & 1);
 
     let useCMap = null;
@@ -157,13 +156,13 @@ class BinaryCMapReader {
     let code;
 
     let b;
-    while ((b = stream.readByte()) >= 0) {
+    while ((b = stream.getByte()) >= 0) {
       const type = b >> 5;
       if (type === 7) {
         // metadata, e.g. comment or usecmap
         switch (b & 0x1f) {
           case 0:
-            stream.readString(); // skipping comment
+            stream.readString(true); // skipping comment
             break;
           case 1:
             useCMap = stream.readString();
@@ -316,10 +315,7 @@ class BinaryCMapReader {
       }
     }
 
-    if (useCMap) {
-      return extend(useCMap);
-    }
-    return cMap;
+    return useCMap ? extend(useCMap) : cMap;
   }
 }
 
